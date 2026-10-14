@@ -4,7 +4,7 @@
 #
 # usage:
 #   uv run python -I scripts/train_text.py --csv-dir data/meld/csv --wav-dir data/wav/center \
-#       --out-dir runs/text_base_s0 [--model FacebookAI/roberta-base] [--epochs 4] [--seed 0] [--no-class-weights]
+#       --out-dir runs/text_base_s0 [--model FacebookAI/roberta-base] [--epochs 4] [--seed 0] [--class-weights sqrt]
 import argparse
 import json
 import sys
@@ -24,7 +24,7 @@ from meld_data import EMOTIONS, load_all
 def class_weights(labels):
     # return a float tensor of shape (7,), one weight per class, so mistakes on
     # rare classes (disgust, fear) cost more in the loss. labels is a list of ints 0-6.
-    # --no-class-weights skips this, so every class counts the same (plain cross-entropy)
+    # --class-weights none skips this, so every class counts the same (plain cross-entropy)
     labels = torch.tensor(labels) # turn from plain python list to tensor
     n = labels.shape[0] # total # of training examples
     k = len(EMOTIONS) # number of classes
@@ -73,7 +73,8 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--max-len", type=int, default=128)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--no-class-weights", action="store_true", help="plain cross-entropy, for the unweighted baseline")
+    ap.add_argument("--class-weights", choices=["none", "inverse", "sqrt"], default="sqrt",
+                    help="none: plain cross-entropy, inverse: N / (K n_c), sqrt: square root of inverse")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -83,7 +84,7 @@ def main():
     data = load_all(args.csv_dir, args.wav_dir)
     train, dev = data["train"], data["dev"]  # test stays untouched until the very end
 
-    # pretrained encoder + a new, randomly initialized linear head with 7 outputs on top.
+    # pretrained encoder + a new, randomly initialized head (768 -> 768 -> 7) on top.
     # both get trained: the head learns the classes, the encoder adapts a little
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=len(EMOTIONS))
@@ -93,8 +94,11 @@ def main():
     dev_loader = make_loader(dev, tokenizer, args.max_len, args.batch_size, shuffle=False)
 
     weights = None
-    if not args.no_class_weights:
+    if args.class_weights != "none":
         weights = class_weights(train.label.tolist())
+    if args.class_weights == "sqrt":
+        # softer: fear vs neutral goes from about 17x to about 4x
+        weights = torch.sqrt(weights)
     if weights is not None:
         weights = weights.to(device)
         print(f"class weights: {dict(zip(EMOTIONS, weights.tolist()))}")
