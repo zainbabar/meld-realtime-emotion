@@ -1,0 +1,9 @@
+data/
+*.wav
+*.mp4
+*.pt
+*.npy
+__pycache__/
+.venv/
+.claude
+CLAUDE.md
