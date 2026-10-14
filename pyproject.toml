@@ -1,0 +1,18 @@
+[project]
+name = "meld-realtime-emotion"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pandas>=3.0.6",
+    "torch>=2.14.1",
+]
+
+# PyTorch's own index has the CUDA 13.0 aarch64 builds; PyPI's torch for aarch64 is CPU-only.
+# explicit = true means only the packages mapped below come from this index.
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130" }]

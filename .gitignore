@@ -7,3 +7,31 @@ __pycache__/
 .venv/
 .claude
 CLAUDE.md
+NOTES.md
+AGENTS.md
+background-draft.md
+
+# model and run artifacts
+*.pth
+*.ckpt
+*.safetensors
+*.npz
+checkpoints/
+runs/
+wandb/
+outputs/
+cache/
+*.log
+
+# other audio
+*.mp3
+*.flac
+*.m4a
+
+# python and tool junk
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+.DS_Store
