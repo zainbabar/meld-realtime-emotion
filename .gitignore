@@ -5,11 +5,7 @@ data/
 *.npy
 __pycache__/
 .venv/
-.claude
-CLAUDE.md
-NOTES.md
-AGENTS.md
-background-draft.md
+docs/
 
 # model and run artifacts
 *.pth
