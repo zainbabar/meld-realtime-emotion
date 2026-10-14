@@ -91,13 +91,17 @@ def main():
         extra = sorted(files.keys() - wanted)
         extra_clips = [n for n in extra if CLIP_RE.match(n)]
         print(f"  {s:5s}  dir {d}")
-        print(f"         {len(files)} files, {len(wanted)} CSV rows, {len(missing)} missing, {len(tiny)} < {TINY_BYTES} B")
+        print(
+            f"         {len(files)} files, {len(wanted)} CSV rows, {len(missing)} missing, {len(tiny)} < {TINY_BYTES} B"
+        )
         for n in missing:
             print(f"         MISSING  {s}/{n}")
         for n in tiny:
             print(f"         TINY     {s}/{n} ({files[n].stat().st_size} B)")
         if extra:
-            print(f"         {len(extra)} files not in the CSV ({len(extra_clips)} match diaX_uttY.mp4), e.g. {extra[:5]}")
+            print(
+                f"         {len(extra)} files not in the CSV ({len(extra_clips)} match diaX_uttY.mp4), e.g. {extra[:5]}"
+            )
 
 
 if __name__ == "__main__":

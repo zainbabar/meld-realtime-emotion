@@ -25,11 +25,14 @@ C1_RE = re.compile("[\u0080-\u009f]")
 # then fold curly quotes and dashes to ascii, since half the corpus already uses
 # ascii ' and " and we want "company's" to tokenize the same way everywhere
 TO_ASCII = {
-    "‘": "'", "’": "'",   # single quotes
-    "“": '"', "”": '"',   # double quotes
-    "–": "-", "—": "--",  # en dash, em dash
-    "…": "...",                # ellipsis
-    " ": " ",                  # non-breaking space
+    "‘": "'",
+    "’": "'",  # single quotes
+    "“": '"',
+    "”": '"',  # double quotes
+    "–": "-",
+    "—": "--",  # en dash, em dash
+    "…": "...",  # ellipsis
+    " ": " ",  # non-breaking space
 }
 AUDIO_OK = ("ok", "ok_warnings")
 
@@ -83,8 +86,7 @@ def main():
     for split, df in data.items():
         no_audio = df[~df.has_audio]
         names = [f"{r.name} ({r.audio_status})" for r in no_audio.itertuples()]
-        print(f"  {split:5s}  {len(df):5d} rows, {df.has_audio.sum():5d} with audio, "
-              f"{len(no_audio)} without: {names}")
+        print(f"  {split:5s}  {len(df):5d} rows, {df.has_audio.sum():5d} with audio, {len(no_audio)} without: {names}")
         print(f"         label id counts: {df.label.value_counts().sort_index().to_dict()}")
         print(f"         unmapped labels: {df.label.isna().sum()}")
 
@@ -95,9 +97,11 @@ def main():
         chars = set()
         for text in df.text[non_ascii]:
             chars |= {c for c in text if ord(c) > 127}
-        print(f"  {split:5s}  {changed.sum():4d} utterances changed, "
-              f"{df.text.str.contains(C1_RE).sum()} still have C1 chars, "
-              f"non-ascii left: {''.join(sorted(chars))!r}")
+        print(
+            f"  {split:5s}  {changed.sum():4d} utterances changed, "
+            f"{df.text.str.contains(C1_RE).sum()} still have C1 chars, "
+            f"non-ascii left: {''.join(sorted(chars))!r}"
+        )
     train = data["train"]
     examples = train[train.Utterance.str.contains(C1_RE)].head(4)
     for r in examples.itertuples():

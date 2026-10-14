@@ -25,13 +25,12 @@ def class_weights(labels):
     # return a float tensor of shape (7,), one weight per class, so mistakes on
     # rare classes (disgust, fear) cost more in the loss. labels is a list of ints 0-6.
     # --class-weights none skips this, so every class counts the same (plain cross-entropy)
-    labels = torch.tensor(labels) # turn from plain python list to tensor
-    n = labels.shape[0] # total # of training examples
-    k = len(EMOTIONS) # number of classes
-    counts = torch.bincount(labels, minlength=7) # count of hm times each label 0-6 appears, tensor shape (7, )
+    labels = torch.tensor(labels)  # turn from plain python list to tensor
+    n = labels.shape[0]  # total # of training examples
+    k = len(EMOTIONS)  # number of classes
+    counts = torch.bincount(labels, minlength=7)  # count of hm times each label 0-6 appears, tensor shape (7, )
     weights = n / (k * counts)
     return weights
-
 
 
 def make_loader(df, tokenizer, max_len, batch_size, shuffle):
@@ -73,8 +72,12 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--max-len", type=int, default=128)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--class-weights", choices=["none", "inverse", "sqrt"], default="sqrt",
-                    help="none: plain cross-entropy, inverse: N / (K n_c), sqrt: square root of inverse")
+    ap.add_argument(
+        "--class-weights",
+        choices=["none", "inverse", "sqrt"],
+        default="sqrt",
+        help="none: plain cross-entropy, inverse: N / (K n_c), sqrt: square root of inverse",
+    )
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -134,10 +137,18 @@ def main():
         macro = f1_score(golds, preds, average="macro")
         weighted = f1_score(golds, preds, average="weighted")
         secs = time.perf_counter() - t0
-        print(f"epoch {epoch}  train loss {total_loss / len(train_loader):.4f}  "
-              f"dev macro F1 {macro:.4f}  weighted F1 {weighted:.4f}  ({secs:.0f} s)")
-        history.append({"epoch": epoch, "train_loss": total_loss / len(train_loader),
-                        "dev_macro_f1": macro, "dev_weighted_f1": weighted})
+        print(
+            f"epoch {epoch}  train loss {total_loss / len(train_loader):.4f}  "
+            f"dev macro F1 {macro:.4f}  weighted F1 {weighted:.4f}  ({secs:.0f} s)"
+        )
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": total_loss / len(train_loader),
+                "dev_macro_f1": macro,
+                "dev_weighted_f1": weighted,
+            }
+        )
 
         # keep the epoch with the best dev macro F1, since macro is the number we care about
         if macro > best_f1:
@@ -147,8 +158,12 @@ def main():
             report = classification_report(golds, preds, target_names=EMOTIONS, digits=3, zero_division=0)
 
     print(f"\nbest dev macro F1 {best_f1:.4f}, per class:\n{report}")
-    results = {"args": {k: str(v) for k, v in vars(args).items()}, "history": history,
-               "best_dev_macro_f1": best_f1, "best_report": report}
+    results = {
+        "args": {k: str(v) for k, v in vars(args).items()},
+        "history": history,
+        "best_dev_macro_f1": best_f1,
+        "best_report": report,
+    }
     (args.out_dir / "results.json").write_text(json.dumps(results, indent=2))
     print(f"saved {args.out_dir / 'best'} and {args.out_dir / 'results.json'}")
 

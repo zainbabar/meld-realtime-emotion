@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SHORT_S = 0.2     # shorter than about one syllable
+SHORT_S = 0.2  # shorter than about one syllable
 QUIET_DB = -50.0  # rms in dBFS; typical clips sit around -31
 LONG_S = 30.0
 # ffmpeg says this for every 6-channel clip with no layout tag, it isn't a decode problem
@@ -79,7 +79,9 @@ def main():
     suspect = ok[ok.reason != ""]
     cols = ["split", "name", "Emotion", "duration_s", "rms_db", "reason"]
     suspect[cols].to_csv(args.wav_dir / "suspect_clips.csv", index=False)
-    print(f"  {len(suspect)} of {len(ok)} clips: short < {SHORT_S} s, quiet < {QUIET_DB:.0f} dBFS, long > {LONG_S:.0f} s")
+    print(
+        f"  {len(suspect)} of {len(ok)} clips: short < {SHORT_S} s, quiet < {QUIET_DB:.0f} dBFS, long > {LONG_S:.0f} s"
+    )
     print(pd.crosstab(suspect.reason, suspect.split, margins=True).to_string())
     print(f"  by emotion: {suspect.Emotion.value_counts().to_dict()}")
     print(f"  written to {args.wav_dir / 'suspect_clips.csv'}")

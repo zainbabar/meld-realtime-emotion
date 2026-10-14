@@ -18,3 +18,12 @@ explicit = true
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu130" }]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.0",
+]
+
+[tool.ruff]
+# existing scripts use lines up to ~120 chars; ruff's default 88 would rewrap most of them
+line-length = 120

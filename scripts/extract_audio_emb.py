@@ -76,8 +76,10 @@ def main():
         rows = pd.DataFrame({"name": df.name.values, "has_audio": df.has_audio.values, "n_frames": n_frames})
         rows.to_csv(args.out_dir / f"{split}_rows.csv", index=False)
         secs = time.perf_counter() - t0
-        print(f"{split:5s}  {len(df)} rows, {df.has_audio.sum()} with audio, saved {embs.shape} "
-              f"in {secs:.0f} s, frames min {n_frames[n_frames > 0].min()} max {n_frames.max()}")
+        print(
+            f"{split:5s}  {len(df)} rows, {df.has_audio.sum()} with audio, saved {embs.shape} "
+            f"in {secs:.0f} s, frames min {n_frames[n_frames > 0].min()} max {n_frames.max()}"
+        )
 
 
 if __name__ == "__main__":

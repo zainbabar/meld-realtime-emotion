@@ -32,15 +32,39 @@ def rms(x):
 
 def decode_6ch(mp4):
     # all six channels as float32, shape (samples, 6), resampled to 16 kHz like the wavs
-    cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(mp4), "-vn",
-           "-ar", str(SR), "-c:a", "pcm_f32le", "-f", "f32le", "-"]
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(mp4),
+        "-vn",
+        "-ar",
+        str(SR),
+        "-c:a",
+        "pcm_f32le",
+        "-f",
+        "f32le",
+        "-",
+    ]
     r = subprocess.run(cmd, capture_output=True, check=True)
     return np.frombuffer(r.stdout, dtype=np.float32).reshape(-1, 6)
 
 
 def layout_tag(mp4):
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "a:0",
-           "-show_entries", "stream=channel_layout", "-of", "csv=p=0", str(mp4)]
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=channel_layout",
+        "-of",
+        "csv=p=0",
+        str(mp4),
+    ]
     return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
 
@@ -122,8 +146,10 @@ def main():
     print("\n== every 6-channel clip: center wav vs mix wav ==")
     lv = all_levels(manifest, args.mix_dir, args.center_dir)
     q10, q50, q90 = lv.center_minus_mix.quantile([0.1, 0.5, 0.9])
-    print(f"{len(lv)} clips. center minus mix, dB: median {q50:.1f}, 10th-90th [{q10:.1f}, {q90:.1f}], "
-          f"min {lv.center_minus_mix.min():.1f}, max {lv.center_minus_mix.max():.1f}")
+    print(
+        f"{len(lv)} clips. center minus mix, dB: median {q50:.1f}, 10th-90th [{q10:.1f}, {q90:.1f}], "
+        f"min {lv.center_minus_mix.min():.1f}, max {lv.center_minus_mix.max():.1f}"
+    )
     quiet = lv[lv.center_minus_mix < -QUIET_DB].sort_values("center_minus_mix")
     print(f"{len(quiet)} clips with center more than {QUIET_DB:.0f} dB below mix:")
     for r in quiet.itertuples():

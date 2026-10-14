@@ -24,9 +24,9 @@ def standardize(train_x, other_x):
     # per-dimension standardize with the TRAIN mean and std only, so dev never
     # leaks into the stats. train_x is (n_train, ..., 768), other_x is (n_other, ..., 768).
     # return (train_x_std, other_x_std), same shapes as the inputs
-    train_x_std = ((train_x - train_x.mean(axis=0)) / (train_x.std(axis=0) + 1e-6)) # add 1e-6 to avoid div by 0
-    other_x_std = ((other_x - train_x.mean(axis=0)) / (train_x.std(axis=0) + 1e-6)) # std w train mean and std
-    # convert to torch tensors 
+    train_x_std = (train_x - train_x.mean(axis=0)) / (train_x.std(axis=0) + 1e-6)  # add 1e-6 to avoid div by 0
+    other_x_std = (other_x - train_x.mean(axis=0)) / (train_x.std(axis=0) + 1e-6)  # std w train mean and std
+    # convert to torch tensors
     train_x_std = torch.from_numpy(train_x_std).float()
     other_x_std = torch.from_numpy(other_x_std).float()
     return (train_x_std, other_x_std)
@@ -36,10 +36,10 @@ class LinearProbe(nn.Module):
     # one linear layer, 768 -> 7. input (B, 768), output logits (B, 7)
     def __init__(self, n_inputs=768, n_outputs=7):
         super().__init__()
-        self.layers = nn.Sequential( # just 1 layer for now, outputs 7 logits
+        self.layers = nn.Sequential(  # just 1 layer for now, outputs 7 logits
             nn.Linear(in_features=n_inputs, out_features=n_outputs)
         )
-    
+
     def forward(self, inputs):
         return self.layers(inputs)
 
@@ -51,25 +51,33 @@ class WeightedSumProbe(nn.Module):
     def __init__(self, n_inputs=768, n_audio_layers=13, n_outputs=7):
         super().__init__()
         self.n_audio_layers = n_audio_layers
-        # reshape this so its (1, 13, 1), so each layer has a weight 
+        # reshape this so its (1, 13, 1), so each layer has a weight
         # wrapping in nn.Parameter() pytorch sees as part of the model so optimizer updates & gradients calc
         self.layer_weights = nn.Parameter(torch.zeros(n_audio_layers).reshape(1, n_audio_layers, 1))
         self.linear = nn.Linear(n_inputs, n_outputs)
-    
+
     def forward(self, inputs):
         # inputs is shape (B, 13, 768), weights is shape (1, 13, 1)
         # mult by weights and take weighted sum on dim 1 so all layers
-        # collapses into (B, 768) for linear 
+        # collapses into (B, 768) for linear
 
         # positive layer mix that sums to 1; zeros start as an even average
         weights = torch.softmax(self.layer_weights, dim=1)
         weighted_sum = torch.sum((inputs * weights), dim=1)
         return self.linear(weighted_sum)
-        
 
-def train_probe(model: nn.Module, x_train: torch.Tensor, y_train: torch.Tensor,
-                x_dev: torch.Tensor, y_dev: torch.Tensor, weights: torch.Tensor,
-                epochs: int, lr: float, device: torch.device) -> float:
+
+def train_probe(
+    model: nn.Module,
+    x_train: torch.Tensor,
+    y_train: torch.Tensor,
+    x_dev: torch.Tensor,
+    y_dev: torch.Tensor,
+    weights: torch.Tensor,
+    epochs: int,
+    lr: float,
+    device: torch.device,
+) -> float:
     # train on train, evaluate dev macro F1 after every epoch, return the best one.
     # model:   fresh LinearProbe or WeightedSumProbe
     # x_train: float (9989, 768) for one layer, or (9989, 13, 768) for the weighted sum
@@ -109,8 +117,6 @@ def train_probe(model: nn.Module, x_train: torch.Tensor, y_train: torch.Tensor,
     return best_f1
 
 
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv-dir", type=Path, required=True)
@@ -141,7 +147,7 @@ def main():
     # standardize x_train and x_dev
     # for each layer 0..12: slice that layer out, train a fresh LinearProbe, print
     # train one WeightedSumProbe on all 13 layers, print its dev macro F1 and the 13
-    #learned layer weights (softmaxed), so we can see which layers it picked
+    # learned layer weights (softmaxed), so we can see which layers it picked
     x_train_std, x_dev_std = standardize(x_train, x_dev)
 
     for layer in range(13):
@@ -151,7 +157,7 @@ def main():
         probe = LinearProbe()
         f1 = train_probe(probe, train, y_train, dev, y_dev, weights, args.epochs, args.lr, device)
         print(f"layer {layer:2d} dev macro F1 {f1:.4f}")
-    
+
     weighted_sum_probe = WeightedSumProbe()
     f1 = train_probe(weighted_sum_probe, x_train_std, y_train, x_dev_std, y_dev, weights, args.epochs, args.lr, device)
     print(f"weighted sum dev macro F1 {f1:.4f}")

@@ -40,8 +40,18 @@ def wav_duration(path):
 
 def count_channels(ffprobe, src):
     # channels in the first audio stream, 0 if ffprobe can't read the file
-    cmd = [ffprobe, "-v", "error", "-select_streams", "a:0",
-           "-show_entries", "stream=channels", "-of", "csv=p=0", str(src)]
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=channels",
+        "-of",
+        "csv=p=0",
+        str(src),
+    ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout.strip():
         return 0
@@ -71,13 +81,23 @@ def extract_one(ffmpeg, ffprobe, downmix, src, dst):
 
     # write to a temp name first so a crash never leaves a half-written wav behind
     tmp = dst.with_suffix(".tmp.wav")
-    cmd = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-           "-i", str(src),
-           "-vn",                              # drop the video stream
-           *downmix_args(downmix, channels),   # down to one channel
-           "-ar", str(SR),                     # resample (low-pass filter + decimate) to 16 kHz
-           "-c:a", "pcm_s16le",                # uncompressed 16-bit little-endian samples
-           str(tmp)]
+    cmd = [
+        ffmpeg,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(src),
+        "-vn",  # drop the video stream
+        *downmix_args(downmix, channels),  # down to one channel
+        "-ar",
+        str(SR),  # resample (low-pass filter + decimate) to 16 kHz
+        "-c:a",
+        "pcm_s16le",  # uncompressed 16-bit little-endian samples
+        str(tmp),
+    ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     msg = " | ".join(r.stderr.strip().splitlines()[-3:])
     if r.returncode != 0:
@@ -118,9 +138,17 @@ def main():
         (args.out_dir / split).mkdir(parents=True, exist_ok=True)
         for r in df.itertuples():
             name = f"dia{r.Dialogue_ID}_utt{r.Utterance_ID}"
-            jobs.append(dict(split=split, name=name, Dialogue_ID=r.Dialogue_ID, Utterance_ID=r.Utterance_ID,
-                             Emotion=r.Emotion, mp4=mp4_dirs[split] / f"{name}.mp4",
-                             wav=args.out_dir / split / f"{name}.wav"))
+            jobs.append(
+                dict(
+                    split=split,
+                    name=name,
+                    Dialogue_ID=r.Dialogue_ID,
+                    Utterance_ID=r.Utterance_ID,
+                    Emotion=r.Emotion,
+                    mp4=mp4_dirs[split] / f"{name}.mp4",
+                    wav=args.out_dir / split / f"{name}.wav",
+                )
+            )
 
     def run(job):
         return extract_one(args.ffmpeg, args.ffprobe, args.downmix, job["mp4"], job["wav"])
@@ -143,8 +171,10 @@ def main():
         print(f"  {r.status:12s} {r.split}/{r.name}  {r.message}")
 
     d = manifest.duration_s.dropna()
-    print(f"\nduration (s): min {d.min():.2f}  median {d.median():.2f}  p95 {d.quantile(.95):.2f}  "
-          f"max {d.max():.2f}  total {d.sum() / 3600:.2f} h")
+    print(
+        f"\nduration (s): min {d.min():.2f}  median {d.median():.2f}  p95 {d.quantile(0.95):.2f}  "
+        f"max {d.max():.2f}  total {d.sum() / 3600:.2f} h"
+    )
     long = manifest[manifest.duration_s > LONG_CLIP_S].sort_values("duration_s", ascending=False)
     examples = [f"{r.split}/{r.name} ({r.duration_s:.0f}s)" for r in long.head(5).itertuples()]
     print(f"{len(long)} clips longer than {LONG_CLIP_S:.0f} s, e.g.: {', '.join(examples)}")
