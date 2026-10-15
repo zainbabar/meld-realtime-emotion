@@ -6,9 +6,13 @@
 # builds the stream from MELD dev dialogue N (clips joined with 1 s of silence) and prints the
 # true label next to each prediction.
 #
+# defaults are the final config: roberta-large + wavlm-large fused model, whisper-medium.en, qwen3-1.7b.
+# the base config: --text-model FacebookAI/roberta-base --audio-model microsoft/wavlm-base-plus
+#   --asr-model openai/whisper-small.en --emb-dir data/emb/wavlm_base_plus --ckpt runs/fusion_s0/best.pt
+#
 # usage:
 #   uv run python -I scripts/live_loop.py --csv-dir data/meld/csv --wav-dir data/wav/center \
-#       --emb-dir data/emb/wavlm_base_plus --ckpt runs/fusion_s0/best.pt --dev-dialogue 90
+#       --emb-dir data/emb/wavlm_large --ckpt runs/large_fusion_s0/best.pt --dev-dialogue 90
 #   uv run python -I scripts/live_loop.py ... --wav some_16k_mono.wav
 import argparse
 import json
@@ -21,6 +25,7 @@ from threading import Thread
 import numpy as np
 import torch
 from transformers import (
+    AutoFeatureExtractor,
     AutoModel,
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -30,6 +35,7 @@ from transformers import (
 )
 
 sys.path.insert(0, str(Path(__file__).parent))  # let scripts import each other under -I
+from extract_audio_emb import normalize_wav
 from meld_data import EMOTIONS, load_all
 from train_fusion import FusionModel
 
@@ -76,9 +82,9 @@ class Endpointer:
             self.speaking = True
             self.waiting = False
             self.cur_speak.append(chunk)
-        elif self.speaking: # only count quiet if speaking, waiting do nothing
+        elif self.speaking:  # only count quiet if speaking, waiting do nothing
             self.cur_silence.append(chunk)
-            self.cur_speak.append(chunk) # short pauses stay in the audio instead of being cut out
+            self.cur_speak.append(chunk)  # short pauses stay in the audio instead of being cut out
 
         # hit our limit just return even if still speaking
         if len(self.cur_speak) >= self.max_chunks:
@@ -138,10 +144,13 @@ def main():
     ap.add_argument("--ckpt", type=Path, required=True, help="fused model state_dict from train_fusion.py")
     ap.add_argument("--wav", type=Path, default=None, help="16 kHz mono wav to stream")
     ap.add_argument("--dev-dialogue", type=int, default=None, help="stream this MELD dev dialogue instead")
-    ap.add_argument("--text-model", default="FacebookAI/roberta-base")
-    ap.add_argument("--audio-model", default="microsoft/wavlm-base-plus")
-    ap.add_argument("--asr-model", default="openai/whisper-small.en")
+    ap.add_argument("--text-model", default="FacebookAI/roberta-large")
+    ap.add_argument("--audio-model", default="microsoft/wavlm-large")
+    ap.add_argument("--asr-model", default="openai/whisper-medium.en")
     ap.add_argument("--llm", default="Qwen/Qwen3-1.7B")
+    ap.add_argument(
+        "--context", type=int, default=0, help="previous utterances to give the text model, same as training"
+    )
     ap.add_argument("--hangover-ms", type=int, default=600)
     ap.add_argument("--threshold-db", type=float, default=-40.0)
     ap.add_argument("--out", type=Path, default=None, help="also write the json lines here")
@@ -150,17 +159,20 @@ def main():
 
     # load everything once, before the stream starts
     t_load = time.perf_counter()
+    # same standardizing as training: train mean and std per layer and dimension
+    train_emb = np.load(args.emb_dir / "train.npy").astype(np.float32)
+    n_audio_layers, audio_dim = train_emb.shape[1], train_emb.shape[2]
+    audio_mean = torch.from_numpy(train_emb.mean(axis=0)).to(device)
+    audio_std = torch.from_numpy(train_emb.std(axis=0) + 1e-6).to(device)
+    del train_emb
+
     tokenizer = AutoTokenizer.from_pretrained(args.text_model)
-    fused = FusionModel(args.text_model)
+    fused = FusionModel(args.text_model, n_audio_layers, audio_dim)
     fused.load_state_dict(torch.load(args.ckpt, map_location="cpu"))
     fused.to(device).eval()
 
     wavlm = AutoModel.from_pretrained(args.audio_model).to(device).eval()
-    # same standardizing as training: train mean and std per layer and dimension
-    train_emb = np.load(args.emb_dir / "train.npy").astype(np.float32)
-    audio_mean = torch.from_numpy(train_emb.mean(axis=0)).to(device)
-    audio_std = torch.from_numpy(train_emb.std(axis=0) + 1e-6).to(device)
-    del train_emb
+    normalize = AutoFeatureExtractor.from_pretrained(args.audio_model).do_normalize  # true for wavlm-large
 
     asr_proc = WhisperProcessor.from_pretrained(args.asr_model)
     asr = WhisperForConditionalGeneration.from_pretrained(args.asr_model, dtype=torch.float16).to(device).eval()
@@ -170,14 +182,14 @@ def main():
 
     # learned parameters on the inference path, for the 6B budget
     counts = {
-        "roberta + fusion head": sum(p.numel() for p in fused.parameters()),
-        "wavlm-base-plus": sum(p.numel() for p in wavlm.parameters()),
-        "whisper-small.en": sum(p.numel() for p in asr.parameters()),
-        "qwen3-1.7b": sum(p.numel() for p in llm.parameters()),
+        f"{args.text_model} + head": sum(p.numel() for p in fused.parameters()),
+        args.audio_model: sum(p.numel() for p in wavlm.parameters()),
+        args.asr_model: sum(p.numel() for p in asr.parameters()),
+        args.llm: sum(p.numel() for p in llm.parameters()),
     }
     for name, n in counts.items():
-        print(f"  {name:22s} {n / 1e6:8.1f} M")
-    print(f"  {'total':22s} {sum(counts.values()) / 1e9:8.3f} B   (limit 6 B)")
+        print(f"  {name:36s} {n / 1e6:8.1f} M")
+    print(f"  {'total':36s} {sum(counts.values()) / 1e9:8.3f} B   (limit 6 B)")
     print(f"models loaded in {time.perf_counter() - t_load:.1f} s\n")
 
     def transcribe(audio):
@@ -185,12 +197,21 @@ def main():
         ids = asr.generate(feats.to(device, torch.float16))
         return asr_proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
 
+    history = []  # earlier transcripts in this stream, for --context
+
     def classify(audio, text):
         # same audio vector as extract_audio_emb.py: every layer, mean over time
+        if normalize:
+            audio = normalize_wav(audio)
         x = torch.from_numpy(audio).unsqueeze(0).to(device)
-        hidden = torch.stack(wavlm(x, output_hidden_states=True).hidden_states).squeeze(1)  # (13, frames, 768)
-        vec = (hidden.mean(dim=1) - audio_mean) / audio_std  # (13, 768)
-        enc = tokenizer([text], truncation=True, max_length=128, return_tensors="pt").to(device)
+        hidden = torch.stack(wavlm(x, output_hidden_states=True).hidden_states).squeeze(1)  # (layers, frames, dim)
+        vec = (hidden.mean(dim=1) - audio_mean) / audio_std  # (layers, dim)
+        if args.context > 0:
+            tokenizer.truncation_side = "left"
+            ctx = " ".join(history[-args.context :])
+            enc = tokenizer([ctx], [text], truncation="only_first", max_length=128, return_tensors="pt").to(device)
+        else:
+            enc = tokenizer([text], truncation=True, max_length=128, return_tensors="pt").to(device)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             logits = fused(enc.input_ids, enc.attention_mask, vec.unsqueeze(0))
         return torch.softmax(logits.float(), dim=-1)[0].cpu()
@@ -254,6 +275,7 @@ def main():
         with torch.no_grad():
             text = transcribe(utterance)
             probs = classify(utterance, text)
+        history.append(text)
         k = int(probs.argmax())
         t_tag = time.perf_counter()
         print(f'[{start_s:6.1f}-{end_s:6.1f} s] "{text}"')

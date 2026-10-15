@@ -145,23 +145,24 @@ def main():
     weights = torch.sqrt(class_weights(data["train"].label.tolist())).to(device)
 
     # standardize x_train and x_dev
-    # for each layer 0..12: slice that layer out, train a fresh LinearProbe, print
-    # train one WeightedSumProbe on all 13 layers, print its dev macro F1 and the 13
+    # for each layer: slice that layer out, train a fresh LinearProbe, print
+    # train one WeightedSumProbe on all layers, print its dev macro F1 and the
     # learned layer weights (softmaxed), so we can see which layers it picked
     x_train_std, x_dev_std = standardize(x_train, x_dev)
+    n_layers, hidden = x_train.shape[1], x_train.shape[2]  # 13 x 768 for base, 25 x 1024 for large
 
-    for layer in range(13):
+    for layer in range(n_layers):
         # slice out each layer from set
         train = x_train_std[:, layer, :]
         dev = x_dev_std[:, layer, :]
-        probe = LinearProbe()
+        probe = LinearProbe(n_inputs=hidden)
         f1 = train_probe(probe, train, y_train, dev, y_dev, weights, args.epochs, args.lr, device)
         print(f"layer {layer:2d} dev macro F1 {f1:.4f}")
 
-    weighted_sum_probe = WeightedSumProbe()
+    weighted_sum_probe = WeightedSumProbe(n_inputs=hidden, n_audio_layers=n_layers)
     f1 = train_probe(weighted_sum_probe, x_train_std, y_train, x_dev_std, y_dev, weights, args.epochs, args.lr, device)
     print(f"weighted sum dev macro F1 {f1:.4f}")
-    # softmax the raw (1, 13, 1) params the same way forward does, to get the final layer mix
+    # softmax the raw (1, n_layers, 1) params the same way forward does, to get the final layer mix
     mix = torch.softmax(weighted_sum_probe.layer_weights, dim=1).flatten().detach().cpu()
     print("layer weights: " + "  ".join(f"{i}:{w:.3f}" for i, w in enumerate(mix.tolist())))
 

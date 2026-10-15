@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from transformers import AutoModel
+from transformers import AutoFeatureExtractor, AutoModel
 
 sys.path.insert(0, str(Path(__file__).parent))  # let scripts import each other under -I
 from meld_data import SPLITS, load_all
@@ -32,6 +32,11 @@ def read_wav(path):
     with wave.open(path) as w:
         x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
     return x.astype(np.float32) / 32768
+
+
+def normalize_wav(x):
+    # zero mean, unit variance per clip, same as the model's own feature extractor does
+    return (x - x.mean()) / np.sqrt(x.var() + 1e-7)
 
 
 def main():
@@ -49,6 +54,9 @@ def main():
     model.eval()  # frozen: turns off dropout, and we never call backward
     n_layers = model.config.num_hidden_layers + 1  # +1 for the input to the first transformer layer
     hidden = model.config.hidden_size
+    # wavlm-base-plus takes the raw waveform, wavlm-large expects each clip at zero mean, unit variance
+    normalize = AutoFeatureExtractor.from_pretrained(args.model).do_normalize
+    print(f"{args.model}: {n_layers} layers x {hidden}, normalize waveform: {normalize}")
 
     data = load_all(args.csv_dir, args.wav_dir)
     for split in SPLITS:
@@ -64,6 +72,8 @@ def main():
             if not r.has_audio:
                 continue
             x = read_wav(r.wav)[: int(MAX_S * SR)]
+            if normalize:
+                x = normalize_wav(x)
             x = torch.from_numpy(x).unsqueeze(0).to(device)  # shape (1, samples)
             with torch.no_grad():
                 out = model(x, output_hidden_states=True)

@@ -19,7 +19,7 @@ from transformers import AutoTokenizer
 sys.path.insert(0, str(Path(__file__).parent))  # let scripts import each other under -I
 from audio_probe import standardize
 from meld_data import EMOTIONS, load_all
-from train_fusion import FusionModel, make_loader, predict
+from train_fusion import FusionModel, build_context, make_loader, predict
 
 
 def main():
@@ -30,6 +30,9 @@ def main():
     ap.add_argument("--split", choices=["dev", "test"], default="test")
     ap.add_argument("--runs", type=Path, nargs="+", required=True)
     ap.add_argument("--model", default="FacebookAI/roberta-base")
+    ap.add_argument("--out", type=Path, default=None, help="default runs/eval_<split>.json")
+    ap.add_argument("--context", type=int, default=0, help="must match the --context the runs were trained with")
+    ap.add_argument("--max-len", type=int, default=128, help="must match training too")
     args = ap.parse_args()
     device = torch.device("cuda")
 
@@ -39,12 +42,16 @@ def main():
     audio_split = np.load(args.emb_dir / f"{args.split}.npy").astype(np.float32)
     _, audio_split = standardize(audio_train, audio_split)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    contexts = None
+    if args.context > 0:
+        tokenizer.truncation_side = "left"
+        contexts = build_context(df, args.context)
 
     results = {}
     for run in args.runs:
         audio = torch.zeros_like(audio_split) if "noaudio" in run.name else audio_split
-        loader = make_loader(df, audio, tokenizer, 128, 64, shuffle=False)
-        model = FusionModel(args.model)
+        loader = make_loader(df, audio, tokenizer, args.max_len, 64, False, contexts)
+        model = FusionModel(args.model, audio_split.shape[1], audio_split.shape[2])
         model.load_state_dict(torch.load(run / "best.pt", map_location="cpu"))
         model.to(device)
         preds, golds = predict(model, loader, device)
@@ -60,24 +67,23 @@ def main():
         }
         print(f"{run.name:20s} {args.split} macro F1 {macro:.4f}  weighted F1 {weighted:.4f}")
 
-    # mean over seeds for each setting (fused vs noaudio)
+    # mean over seeds for each setting: runs named <setting>_s<seed>, e.g. fusion_s0 and fusion_noaudio_s0
     print()
-    for setting in ["fusion_s", "fusion_noaudio_s"]:
-        names = [n for n in results if n.startswith(setting)]
-        if not names:
-            continue
+    settings = {}
+    for name in results:
+        settings.setdefault(name.rsplit("_s", 1)[0], []).append(name)
+    for setting, names in settings.items():
         macro = [results[n]["macro_f1"] for n in names]
         weighted = [results[n]["weighted_f1"] for n in names]
-        label = "fused" if setting == "fusion_s" else "no audio"
         print(
-            f"{label:9s} mean over {len(names)} seeds: macro F1 {np.mean(macro):.4f} "
+            f"{setting:22s} mean over {len(names)} seeds: macro F1 {np.mean(macro):.4f} "
             f"(min {min(macro):.4f}, max {max(macro):.4f})  weighted F1 {np.mean(weighted):.4f}"
         )
-        for i, emotion in enumerate(EMOTIONS):
+        for emotion in EMOTIONS:
             vals = [results[n]["per_class_f1"][emotion] for n in names]
             print(f"    {emotion:9s} {np.mean(vals):.3f}")
 
-    out = Path("runs") / f"eval_{args.split}.json"
+    out = args.out or Path("runs") / f"eval_{args.split}.json"
     out.write_text(json.dumps(results, indent=2))
     print(f"\nsaved {out}")
 

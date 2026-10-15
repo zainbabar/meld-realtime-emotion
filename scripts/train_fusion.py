@@ -29,20 +29,21 @@ from train_text import class_weights
 
 
 class FusionHead(nn.Module):
-    # inputs:  text_vec (B, 768)     roberta's <s> vector for each line
-    #          audio    (B, 13, 768) standardized WavLM vectors, all 13 layers
+    # inputs:  text_vec (B, text_dim)               roberta's <s> vector for each line
+    #          audio    (B, n_audio_layers, audio_dim) standardized WavLM vectors, every layer
     # output:  logits   (B, 7)
-    # learned weighted sum over the 13 audio layers (same as WeightedSumProbe) -> (B, 768),
-    # joined with the text side by side -> (B, 1536), then a small MLP down to 7 scores
-    def __init__(self, n_audio_layers=13, n_inputs=1536, n_outputs=7):
+    # sizes: base models are 768 text, 13 x 768 audio; large are 1024 text, 25 x 1024 audio
+    # learned weighted sum over the audio layers (same as WeightedSumProbe) -> (B, audio_dim),
+    # joined with the text side by side -> (B, text_dim + audio_dim), then a small MLP down to 7 scores
+    def __init__(self, n_audio_layers=13, text_dim=768, audio_dim=768, n_outputs=7):
         super().__init__()
         self.layer_weights = nn.Parameter(torch.zeros(n_audio_layers).reshape(1, n_audio_layers, 1))
         # one LayerNorm per half, so text and audio each get their own learned scale and shift.
         # modules set as attributes are registered automatically, no nn.Parameter needed
-        self.audio_norm = nn.LayerNorm(n_inputs // 2)
-        self.text_norm = nn.LayerNorm(n_inputs // 2)
+        self.audio_norm = nn.LayerNorm(audio_dim)
+        self.text_norm = nn.LayerNorm(text_dim)
         self.mlp = nn.Sequential(
-            nn.Linear(n_inputs, 256),
+            nn.Linear(text_dim + audio_dim, 256),
             nn.ReLU(),
             nn.Dropout(0.2),  # zero 20% of the hidden values in training to prevent overfitting
             nn.Linear(256, n_outputs),
@@ -52,17 +53,17 @@ class FusionHead(nn.Module):
         weights = torch.softmax(self.layer_weights, dim=1)
         weighted_sum = torch.sum((audio * weights), dim=1)  # weighted sum to encode each audio layers meaning
 
-        # put both halves on the same scale, then join side by side -> (B, 1536)
+        # put both halves on the same scale, then join side by side -> (B, text_dim + audio_dim)
         combined = torch.concat((self.audio_norm(weighted_sum), self.text_norm(text_vec)), dim=1)
         return self.mlp(combined)
 
 
 class FusionModel(nn.Module):
-    # bare roberta (no built-in head) + fusion head
-    def __init__(self, model_name):
+    # bare roberta (no built-in head) + fusion head. the audio sizes come from the cached vectors
+    def __init__(self, model_name, n_audio_layers=13, audio_dim=768):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
-        self.head = FusionHead()
+        self.head = FusionHead(n_audio_layers, self.encoder.config.hidden_size, audio_dim)
 
     def forward(self, input_ids, attention_mask, audio):
         out = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
@@ -70,16 +71,35 @@ class FusionModel(nn.Module):
         return self.head(text_vec, audio)
 
 
-def make_loader(df, audio, tokenizer, max_len, batch_size, shuffle):
+def build_context(df, n):
+    # the previous n lines of the same dialogue, oldest first, joined with spaces. no speaker
+    # names, since the live loop can't tell speakers apart. the csvs are in dialogue/utterance order
+    contexts = []
+    history = {}
+    for r in df.itertuples():
+        earlier = history.setdefault(r.Dialogue_ID, [])
+        contexts.append(" ".join(earlier[-n:]))
+        earlier.append(r.text)
+    return contexts
+
+
+def make_loader(df, audio, tokenizer, max_len, batch_size, shuffle, contexts=None):
     # each item is (text, label, row index); the index picks that line's audio from the big tensor
+    # and that line's context, if any
     rows = list(zip(df.text, df.label, range(len(df))))
 
     def collate(batch):
         texts = [text for text, label, i in batch]
         labels = [label for text, label, i in batch]
         idx = [i for text, label, i in batch]
-        enc = tokenizer(texts, padding=True, truncation=True, max_length=max_len, return_tensors="pt")
-        enc["audio"] = audio[idx]  # (B, 13, 768)
+        if contexts is None:
+            enc = tokenizer(texts, padding=True, truncation=True, max_length=max_len, return_tensors="pt")
+        else:
+            # text pair: <s> context </s></s> line </s>. if too long, only the context gets cut,
+            # from the left (oldest words first) because of truncation_side="left" set in main
+            ctx = [contexts[i] for i in idx]
+            enc = tokenizer(ctx, texts, padding=True, truncation="only_first", max_length=max_len, return_tensors="pt")
+        enc["audio"] = audio[idx]  # (B, n_audio_layers, audio_dim)
         enc["labels"] = torch.tensor(labels)
         return enc
 
@@ -112,6 +132,7 @@ def main():
     ap.add_argument("--head-lr", type=float, default=1e-3, help="fusion head (new weights) learning rate")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--max-len", type=int, default=128)
+    ap.add_argument("--context", type=int, default=0, help="previous lines of the dialogue to prepend (0 = none)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-audio", action="store_true", help="zero the audio input (text-only control)")
     args = ap.parse_args()
@@ -132,10 +153,14 @@ def main():
         audio_dev = torch.zeros_like(audio_dev)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = FusionModel(args.model).to(device)
+    model = FusionModel(args.model, audio_train.shape[1], audio_train.shape[2]).to(device)
 
-    train_loader = make_loader(train, audio_train, tokenizer, args.max_len, args.batch_size, shuffle=True)
-    dev_loader = make_loader(dev, audio_dev, tokenizer, args.max_len, args.batch_size, shuffle=False)
+    train_ctx, dev_ctx = None, None
+    if args.context > 0:
+        tokenizer.truncation_side = "left"
+        train_ctx, dev_ctx = build_context(train, args.context), build_context(dev, args.context)
+    train_loader = make_loader(train, audio_train, tokenizer, args.max_len, args.batch_size, True, train_ctx)
+    dev_loader = make_loader(dev, audio_dev, tokenizer, args.max_len, args.batch_size, False, dev_ctx)
 
     # sqrt class weights, the text baseline's default
     weights = torch.sqrt(class_weights(train.label.tolist())).to(device)
